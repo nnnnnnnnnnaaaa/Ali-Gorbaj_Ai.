@@ -1,0 +1,101 @@
+name: Build Ali Gorbaj-AI APK
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - 'Ali_Gorbaj_AI_FINAL.zip'
+      - '.github/workflows/build-apk.yml'
+
+permissions:
+  contents: read
+
+env:
+  GRADLE_VERSION: '9.4.1'
+  ANDROID_API: '37'
+  ANDROID_BUILD_TOOLS: '36.0.0'
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout build repository
+        uses: actions/checkout@v4
+
+      - name: Install system tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y unzip zip ffmpeg
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK components
+        run: |
+          sdkmanager "platform-tools" "platforms;android-${ANDROID_API}" "build-tools;${ANDROID_BUILD_TOOLS}"
+          yes | sdkmanager --licenses >/dev/null || true
+
+      - name: Extract project archive
+        run: |
+          rm -rf Ali_Gorbaj_AI
+          mkdir -p Ali_Gorbaj_AI
+          unzip -q Ali_Gorbaj_AI_FINAL.zip -d Ali_Gorbaj_AI
+          if [ -d "Ali_Gorbaj_AI/Ali_Gorbaj_AI" ]; then
+            shopt -s dotglob
+            mv Ali_Gorbaj_AI/Ali_Gorbaj_AI/* Ali_Gorbaj_AI/
+            rmdir Ali_Gorbaj_AI/Ali_Gorbaj_AI
+          fi
+          test -f Ali_Gorbaj_AI/app.py
+          test -f Ali_Gorbaj_AI/android/settings.gradle
+          test -f Ali_Gorbaj_AI/android/app/build.gradle
+
+      - name: Install Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: ${{ env.GRADLE_VERSION }}
+
+      - name: Validate project sources
+        working-directory: Ali_Gorbaj_AI
+        run: |
+          python -m compileall -q -x '(^|/)(\.git|__pycache__)(/|$)' .
+          python scripts/verify_android_source_integrity.py
+
+      - name: Build release APK
+        working-directory: Ali_Gorbaj_AI/android
+        env:
+          STREAMLIT_APP_URL: ''
+          CHAQUOPY_BUILD_PYTHON: python3.10
+        run: |
+          gradle --no-daemon --stacktrace :app:assembleRelease
+
+      - name: Verify APK output
+        working-directory: Ali_Gorbaj_AI
+        run: |
+          APK="android/app/build/outputs/apk/release/app-release.apk"
+          test -s "$APK"
+          sha256sum "$APK" | tee apk-sha256.txt
+          unzip -t "$APK" >/dev/null
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ali-Gorbaj-AI-Android-Release
+          path: |
+            Ali_Gorbaj_AI/android/app/build/outputs/apk/release/app-release.apk
+            Ali_Gorbaj_AI/apk-sha256.txt
+          if-no-files-found: error
+          retention-days: 30
